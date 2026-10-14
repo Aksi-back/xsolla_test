@@ -61,7 +61,7 @@ func (r *Router) Process(ev event.Event) Result {
 	err := r.sender.Send(sender.Payload{
 		EventID:   ev.ID,
 		MMPID:     mmpID,
-		EventName: "purchase",
+		EventName: mmpEventName(ev.Type),
 		Amount:    ev.Data.Amount,
 		Currency:  ev.Data.Currency,
 	})
@@ -83,7 +83,7 @@ func validate(ev event.Event) error {
 		return errors.New("empty user id")
 	case ev.ProjectID <= 0:
 		return errors.New("empty project id")
-	case ev.Type != event.TypePayment:
+	case ev.Type != event.TypePayment && ev.Type != event.TypeRefund:
 		return fmt.Errorf("unsupported event type %q", ev.Type)
 	case ev.Data.Amount <= 0:
 		return fmt.Errorf("amount must be positive, got %v", ev.Data.Amount)
@@ -91,4 +91,12 @@ func validate(ev event.Event) error {
 		return fmt.Errorf("bad currency %q", ev.Data.Currency)
 	}
 	return nil
+}
+
+// mmpEventName — имя события в MMP. Платёж уходит как purchase, возврат как refund.
+func mmpEventName(t event.Type) string {
+	if t == event.TypeRefund {
+		return "refund"
+	}
+	return "purchase"
 }
