@@ -18,6 +18,7 @@ const (
 	StatusNoMapping        Status = "NO_MAPPING"        // нет связки пользователя с MMP, финально
 	StatusValidationFailed Status = "VALIDATION_FAILED" // битое или неподдерживаемое событие, финально
 	StatusProjectDisabled  Status = "PROJECT_DISABLED"  // интеграция проекта выключена, финально
+	StatusGDPRNotApproved  Status = "GDPR_NOT_APPROVED" // пользователь явно отказался, финально
 	StatusRetry            Status = "RETRY"             // повторить позже
 	StatusFailed           Status = "FAILED"            // неустранимая ошибка отправки
 )
@@ -51,6 +52,9 @@ func (r *Router) Process(ev event.Event) Result {
 	}
 	if !project.Enabled {
 		return Result{StatusProjectDisabled, "integration is disabled"}
+	}
+	if blocked, ok := r.consentBlocked(project, ev.UserID); ok {
+		return blocked
 	}
 
 	mmpID, ok := r.store.MMPID(project.AppID, ev.UserID)
@@ -96,6 +100,24 @@ func validate(ev event.Event) error {
 		return fmt.Errorf("bad currency %q", ev.Data.Currency)
 	}
 	return nil
+}
+
+// consentBlocked решает, можно ли вообще трогать данные пользователя.
+// Проверка стоит до поиска маппинга: без согласия MMP-id не ищем и ничего не отправляем.
+// nil у флага значит, что партнёр его не настраивал, поэтому согласие проверяем.
+// false значит, что согласие собирает партнёр и наша запись не используется.
+func (r *Router) consentBlocked(project store.Project, userID string) (Result, bool) {
+	if project.ConsentCheckEnabled != nil && !*project.ConsentCheckEnabled {
+		return Result{}, false
+	}
+	consent, ok := r.store.Consent(project.ID, userID)
+	if !ok {
+		return Result{StatusRetry, "consent not received yet"}, true
+	}
+	if !consent.Approved {
+		return Result{StatusGDPRNotApproved, "consent not approved"}, true
+	}
+	return Result{}, false
 }
 
 // mmpEventName — имя события в MMP.

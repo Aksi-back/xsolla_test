@@ -125,3 +125,93 @@ func TestProcess_TemporaryErrorIsRetried(t *testing.T) {
 		t.Fatalf("status = %s, want RETRY", got.Status)
 	}
 }
+
+func TestProcess_Consent(t *testing.T) {
+	enabled := boolPtr(true)
+	disabled := boolPtr(false)
+
+	tests := []struct {
+		name     string
+		project  store.Project
+		mappings []store.Mapping
+		consents []store.Consent
+		ev       event.Event
+		want     Status
+		sent     int
+	}{
+		{
+			name:     "explicit refusal",
+			project:  store.Project{ID: 1, AppID: "app.one", Enabled: true, ConsentCheckEnabled: enabled},
+			mappings: []store.Mapping{{AppID: "app.one", UserID: "alice", MMPID: "mmp-alice"}},
+			consents: []store.Consent{{ProjectID: 1, UserID: "alice", Approved: false}},
+			ev:       payment(1, "alice"),
+			want:     StatusGDPRNotApproved,
+		},
+		{
+			name:     "refusal wins over missing mapping",
+			project:  store.Project{ID: 1, AppID: "app.one", Enabled: true, ConsentCheckEnabled: enabled},
+			consents: []store.Consent{{ProjectID: 1, UserID: "alice", Approved: false}},
+			ev:       payment(1, "alice"),
+			want:     StatusGDPRNotApproved,
+		},
+		{
+			name:     "refund refusal",
+			project:  store.Project{ID: 1, AppID: "app.one", Enabled: true, ConsentCheckEnabled: enabled},
+			mappings: []store.Mapping{{AppID: "app.one", UserID: "alice", MMPID: "mmp-alice"}},
+			consents: []store.Consent{{ProjectID: 1, UserID: "alice", Approved: false}},
+			ev:       refund(1, "alice"),
+			want:     StatusGDPRNotApproved,
+		},
+		{
+			name:     "consent not received yet",
+			project:  store.Project{ID: 1, AppID: "app.one", Enabled: true, ConsentCheckEnabled: enabled},
+			mappings: []store.Mapping{{AppID: "app.one", UserID: "alice", MMPID: "mmp-alice"}},
+			ev:       payment(1, "alice"),
+			want:     StatusRetry,
+		},
+		{
+			name:    "missing consent wins over missing mapping",
+			project: store.Project{ID: 1, AppID: "app.one", Enabled: true, ConsentCheckEnabled: enabled},
+			ev:      payment(1, "alice"),
+			want:    StatusRetry,
+		},
+		{
+			name:     "null flag checks consent",
+			project:  store.Project{ID: 1, AppID: "app.one", Enabled: true},
+			mappings: []store.Mapping{{AppID: "app.one", UserID: "alice", MMPID: "mmp-alice"}},
+			consents: []store.Consent{{ProjectID: 1, UserID: "alice", Approved: false}},
+			ev:       payment(1, "alice"),
+			want:     StatusGDPRNotApproved,
+		},
+		{
+			name:     "partner collects consent",
+			project:  store.Project{ID: 1, AppID: "app.one", Enabled: true, ConsentCheckEnabled: disabled},
+			mappings: []store.Mapping{{AppID: "app.one", UserID: "alice", MMPID: "mmp-alice"}},
+			consents: []store.Consent{{ProjectID: 1, UserID: "alice", Approved: false}},
+			ev:       payment(1, "alice"),
+			want:     StatusSent,
+			sent:     1,
+		},
+		{
+			name:     "partner collects consent without our record",
+			project:  store.Project{ID: 1, AppID: "app.one", Enabled: true, ConsentCheckEnabled: disabled},
+			mappings: []store.Mapping{{AppID: "app.one", UserID: "alice", MMPID: "mmp-alice"}},
+			ev:       payment(1, "alice"),
+			want:     StatusSent,
+			sent:     1,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			fake := &sender.Fake{}
+			st := store.New([]store.Project{tt.project}, tt.mappings, tt.consents)
+			got := New(st, fake).Process(tt.ev)
+			if got.Status != tt.want {
+				t.Fatalf("status = %s (%s), want %s", got.Status, got.Reason, tt.want)
+			}
+			if len(fake.Sent()) != tt.sent {
+				t.Fatalf("sent %d payloads, want %d", len(fake.Sent()), tt.sent)
+			}
+		})
+	}
+}
