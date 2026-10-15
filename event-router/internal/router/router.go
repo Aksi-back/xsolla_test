@@ -71,7 +71,7 @@ func (r *Router) Process(ev event.Event) Result {
 		EventID:   ev.ID,
 		MMPID:     mmpID,
 		EventName: eventName,
-		Amount:    ev.Data.Amount,
+		Amount:    mmpAmount(ev),
 		Currency:  ev.Data.Currency,
 		Sandbox:   ev.DryRun == 1,
 	})
@@ -119,6 +119,16 @@ func (r *Router) consentBlocked(project store.Project, userID string) (Result, b
 		return Result{StatusGDPRNotApproved, "consent not approved"}, true
 	}
 	return Result{}, false
+}
+
+// mmpAmount — сумма для MMP.
+// Платёжка шлёт возврат положительным, как платёж. В MMP у refund уходит минус.
+// Само событие не меняем: проверка на входе по-прежнему требует сумму больше нуля.
+func mmpAmount(ev event.Event) float64 {
+	if ev.Type == event.TypeRefund {
+		return -ev.Data.Amount
+	}
+	return ev.Data.Amount
 }
 
 // mmpEventName — имя события в MMP.
