@@ -200,6 +200,15 @@ func TestProcess_Consent(t *testing.T) {
 			want:     StatusSent,
 			sent:     1,
 		},
+		{
+			name:     "user agreed",
+			project:  store.Project{ID: 1, AppID: "app.one", Enabled: true, ConsentCheckEnabled: enabled},
+			mappings: []store.Mapping{{AppID: "app.one", UserID: "alice", MMPID: "mmp-alice"}},
+			consents: []store.Consent{{ProjectID: 1, UserID: "alice", Approved: true}},
+			ev:       payment(1, "alice"),
+			want:     StatusSent,
+			sent:     1,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
