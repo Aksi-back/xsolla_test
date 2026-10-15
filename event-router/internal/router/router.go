@@ -73,6 +73,7 @@ func (r *Router) Process(ev event.Event) Result {
 		EventName: eventName,
 		Amount:    ev.Data.Amount,
 		Currency:  ev.Data.Currency,
+		Sandbox:   ev.DryRun == 1,
 	})
 	switch {
 	case err == nil:

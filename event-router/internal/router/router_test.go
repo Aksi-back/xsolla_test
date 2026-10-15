@@ -1,6 +1,7 @@
 package router
 
 import (
+	"encoding/json"
 	"testing"
 
 	"eventrouter/internal/event"
@@ -27,16 +28,18 @@ func testStore() *store.Store {
 }
 
 func payment(project int, user string) event.Event {
-	return event.Event{
-		ID: "ev-1", ProjectID: project, UserID: user, Type: event.TypePayment,
-		Data: event.Billing{InvoiceID: 1, Amount: 9.99, Currency: "USD"},
-	}
+	return eventFixture(project, user, event.TypePayment, 0)
 }
 
 func refund(project int, user string) event.Event {
-	ev := payment(project, user)
-	ev.Type = event.TypeRefund
-	return ev
+	return eventFixture(project, user, event.TypeRefund, 0)
+}
+
+func eventFixture(project int, user string, typ event.Type, dryRun int) event.Event {
+	return event.Event{
+		ID: "ev-1", ProjectID: project, UserID: user, Type: typ, DryRun: dryRun,
+		Data: event.Billing{InvoiceID: 1, Amount: 9.99, Currency: "USD"},
+	}
 }
 
 func TestProcess(t *testing.T) {
@@ -74,7 +77,7 @@ func TestProcess_Payload(t *testing.T) {
 	if len(sent) != 1 {
 		t.Fatalf("sent %d payloads, want 1", len(sent))
 	}
-	if p := sent[0]; p.EventName != "purchase" || p.Amount != 9.99 || p.MMPID != "mmp-alice" {
+	if p := sent[0]; p.EventName != "purchase" || p.Amount != 9.99 || p.MMPID != "mmp-alice" || p.Sandbox {
 		t.Fatalf("payload = %+v", p)
 	}
 }
@@ -220,6 +223,103 @@ func TestProcess_Consent(t *testing.T) {
 			}
 			if len(fake.Sent()) != tt.sent {
 				t.Fatalf("sent %d payloads, want %d", len(fake.Sent()), tt.sent)
+			}
+		})
+	}
+}
+
+func TestProcess_DryRun(t *testing.T) {
+	enabled := boolPtr(true)
+	disabled := boolPtr(false)
+	const dryPayment = `{
+		"id": "ev-1",
+		"project_id": 1,
+		"user_id": "alice",
+		"type": "billing-payment",
+		"dry_run": 1,
+		"data": {"invoice_id": 1, "amount": 9.99, "currency": "USD"}
+	}`
+	const dryRefund = `{
+		"id": "ev-1",
+		"project_id": 1,
+		"user_id": "alice",
+		"type": "billing-refund",
+		"dry_run": 1,
+		"data": {"invoice_id": 1, "amount": 9.99, "currency": "USD"}
+	}`
+
+	tests := []struct {
+		name     string
+		project  store.Project
+		mappings []store.Mapping
+		consents []store.Consent
+		raw      string
+		want     Status
+		sandbox  bool
+	}{
+		{
+			name:     "sandbox when consent approved",
+			project:  store.Project{ID: 1, AppID: "app.one", Enabled: true, ConsentCheckEnabled: enabled},
+			mappings: []store.Mapping{{AppID: "app.one", UserID: "alice", MMPID: "mmp-alice"}},
+			consents: []store.Consent{{ProjectID: 1, UserID: "alice", Approved: true}},
+			raw:      dryPayment,
+			want:     StatusSent,
+			sandbox:  true,
+		},
+		{
+			name:     "sandbox refund",
+			project:  store.Project{ID: 1, AppID: "app.one", Enabled: true, ConsentCheckEnabled: enabled},
+			mappings: []store.Mapping{{AppID: "app.one", UserID: "alice", MMPID: "mmp-alice"}},
+			consents: []store.Consent{{ProjectID: 1, UserID: "alice", Approved: true}},
+			raw:      dryRefund,
+			want:     StatusSent,
+			sandbox:  true,
+		},
+		{
+			name:     "sandbox refusal is not sent",
+			project:  store.Project{ID: 1, AppID: "app.one", Enabled: true, ConsentCheckEnabled: enabled},
+			mappings: []store.Mapping{{AppID: "app.one", UserID: "alice", MMPID: "mmp-alice"}},
+			consents: []store.Consent{{ProjectID: 1, UserID: "alice", Approved: false}},
+			raw:      dryPayment,
+			want:     StatusGDPRNotApproved,
+		},
+		{
+			name:     "sandbox waits for consent",
+			project:  store.Project{ID: 1, AppID: "app.one", Enabled: true, ConsentCheckEnabled: enabled},
+			mappings: []store.Mapping{{AppID: "app.one", UserID: "alice", MMPID: "mmp-alice"}},
+			raw:      dryPayment,
+			want:     StatusRetry,
+		},
+		{
+			name:     "sandbox when partner collects consent",
+			project:  store.Project{ID: 1, AppID: "app.one", Enabled: true, ConsentCheckEnabled: disabled},
+			mappings: []store.Mapping{{AppID: "app.one", UserID: "alice", MMPID: "mmp-alice"}},
+			raw:      dryPayment,
+			want:     StatusSent,
+			sandbox:  true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var ev event.Event
+			if err := json.Unmarshal([]byte(tt.raw), &ev); err != nil {
+				t.Fatal(err)
+			}
+			fake := &sender.Fake{}
+			st := store.New([]store.Project{tt.project}, tt.mappings, tt.consents)
+			got := New(st, fake).Process(ev)
+			if got.Status != tt.want {
+				t.Fatalf("status = %s (%s), want %s", got.Status, got.Reason, tt.want)
+			}
+			if tt.want != StatusSent {
+				if len(fake.Sent()) != 0 {
+					t.Fatalf("sent %d payloads, want 0", len(fake.Sent()))
+				}
+				return
+			}
+			sent := fake.Sent()
+			if len(sent) != 1 || sent[0].Sandbox != tt.sandbox {
+				t.Fatalf("sent = %+v, want one sandbox=%v", sent, tt.sandbox)
 			}
 		})
 	}
