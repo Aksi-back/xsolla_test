@@ -58,10 +58,15 @@ func (r *Router) Process(ev event.Event) Result {
 		return Result{StatusNoMapping, "no mmp id for user"}
 	}
 
-	err := r.sender.Send(sender.Payload{
+	eventName, err := mmpEventName(ev.Type)
+	if err != nil {
+		return Result{StatusValidationFailed, err.Error()}
+	}
+
+	err = r.sender.Send(sender.Payload{
 		EventID:   ev.ID,
 		MMPID:     mmpID,
-		EventName: mmpEventName(ev.Type),
+		EventName: eventName,
 		Amount:    ev.Data.Amount,
 		Currency:  ev.Data.Currency,
 	})
@@ -93,10 +98,16 @@ func validate(ev event.Event) error {
 	return nil
 }
 
-// mmpEventName — имя события в MMP. Платёж уходит как purchase, возврат как refund.
-func mmpEventName(t event.Type) string {
-	if t == event.TypeRefund {
-		return "refund"
+// mmpEventName — имя события в MMP.
+// Платёж уходит как purchase, возврат как refund.
+// Любой другой тип — ошибка, а не purchase.
+func mmpEventName(t event.Type) (string, error) {
+	switch t {
+	case event.TypePayment:
+		return "purchase", nil
+	case event.TypeRefund:
+		return "refund", nil
+	default:
+		return "", fmt.Errorf("unsupported event type %q", t)
 	}
-	return "purchase"
 }

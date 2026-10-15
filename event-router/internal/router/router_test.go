@@ -105,6 +105,20 @@ func TestProcess_RefundAmountMustBePositive(t *testing.T) {
 	}
 }
 
+func TestMMPEventName(t *testing.T) {
+	purchase, err := mmpEventName(event.TypePayment)
+	if err != nil || purchase != "purchase" {
+		t.Fatalf("payment = %q, err = %v", purchase, err)
+	}
+	refundName, err := mmpEventName(event.TypeRefund)
+	if err != nil || refundName != "refund" {
+		t.Fatalf("refund = %q, err = %v", refundName, err)
+	}
+	if name, err := mmpEventName(event.TypeCreated); err == nil {
+		t.Fatalf("created mapped to %q, want error", name)
+	}
+}
+
 func TestProcess_TemporaryErrorIsRetried(t *testing.T) {
 	r := New(testStore(), &sender.Fake{Err: sender.ErrTemporary})
 	if got := r.Process(payment(1, "alice")); got.Status != StatusRetry {
